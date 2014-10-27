@@ -1,6 +1,5 @@
 package ca.ubc.cstudies.fluidsurveyssync;
 
-import org.apache.http.impl.client.DefaultHttpClient;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.client.methods.HttpGet;
@@ -14,16 +13,10 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 import javax.net.ssl.SSLContext;
-import java.io.FileReader;
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
 import java.security.NoSuchAlgorithmException;
 import java.security.KeyManagementException;
 import java.sql.SQLException;
-import java.util.Properties;
-
-import oracle.jdbc.pool.OracleDataSource;
 
 public class Discover {
     private static int SURVEY_NAME_LENGTH = 100;

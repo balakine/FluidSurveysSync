@@ -9,11 +9,12 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Properties;
 
 public class Sync {
     private static int SURVEY_NAME_LENGTH = 100;
@@ -30,28 +31,29 @@ public class Sync {
         HttpGet httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/");
         HttpResponse response1 = httpclient.execute(httpGet);
 // 1. Get a list of surveys
-        JSONArray ss;
+        JSONArray surveys;
         try {
             HttpEntity entity1 = response1.getEntity();
-            ss = (new JSONObject(new JSONTokener(entity1.getContent()))).getJSONArray("surveys");
-            for (int i = 0; i < ss.length(); i++) {
-                System.out.println("ID: " + ss.getJSONObject(i).get("id") + ", Name: " + ss.getJSONObject(i).get("name"));
-                AddUpdateSurvey(ss.getJSONObject(i));
-            }
+            surveys = (new JSONObject(new JSONTokener(entity1.getContent()))).getJSONArray("surveys");
             EntityUtils.consume(entity1);
         } finally {
             httpGet.releaseConnection();
         }
 
 // 2. For each survey get CSV responses
-        for (int i = 0; i < ss.length(); i++) {
-            httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + ss.getJSONObject(i).get("id") + "/csv/");
+        JSONObject survey;
+        for (int i = 0; i < surveys.length(); i++) {
+            survey = surveys.getJSONObject(i);
+            System.out.println("ID: " + survey.get("id") + ", Name: " + survey.get("name"));
+            AddUpdateSurvey(survey);
+
+            httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + survey.get("id") + "/csv/");
             response1 = httpclient.execute(httpGet);
             try {
                 HttpEntity entity1 = response1.getEntity();
                 BufferedReader isr = new BufferedReader(new InputStreamReader(entity1.getContent(), "UTF-16LE"));
                 isr.skip(1); // skip unicode marker
-                AddUpdateResponses(isr, ss.getJSONObject(i).getInt("id"));
+                AddUpdateResponses(isr, survey.getInt("id"));
                 EntityUtils.consume(entity1);
             } finally {
                 httpGet.releaseConnection();
