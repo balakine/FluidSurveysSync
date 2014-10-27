@@ -19,34 +19,6 @@ public class Sync {
     private static int SURVEY_NAME_LENGTH = 100;
     private static int QUESTION_HEADER_LENGTH =200;
     private static int ANSWER_VALUE_LENGTH = 200;
-    private static String FLUID_SURVEYS_URL;
-    private static String MYSQL_URL;
-    private static String SRS_URL;
-    static {
-        // Load configuration
-        Properties config = new Properties();
-        try {
-            FileReader in = new FileReader("FluidSurveys.properties");
-            config.load(in);
-            in.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        FLUID_SURVEYS_URL = "https://" +
-                config.getProperty("FS.ApiKey") + ":" +
-                config.getProperty("FS.Password") + "@" +
-                config.getProperty("FS.ServerName");
-        MYSQL_URL = "jdbc:mysql://" +
-                config.getProperty("MySQL.Host") + "/" +
-                config.getProperty("MySQL.Database") + "?user=" +
-                config.getProperty("MySQL.User") + "&password=" +
-                config.getProperty("MySQL.Password");
-        SRS_URL = "jdbc:oracle:thin:" +
-                config.getProperty("SRS.User") + "/" +
-                config.getProperty("SRS.Password") + "@(DESCRIPTION=(ADDRESS=(PROTOCOL=tcp)(PORT=1521)(HOST=" +
-                config.getProperty("SRS.Host") + "))(CONNECT_DATA=(SERVICE_NAME=" +
-                config.getProperty("SRS.ServiceName") + ")))";
-    }
 
     public static void main(String[] args) throws IOException {
         SyncSurveys();
@@ -55,7 +27,7 @@ public class Sync {
     static void SyncSurveys() throws IOException {
 
         DefaultHttpClient httpclient = new DefaultHttpClient();
-        HttpGet httpGet = new HttpGet(FLUID_SURVEYS_URL + "/api/v2/surveys/");
+        HttpGet httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/");
         HttpResponse response1 = httpclient.execute(httpGet);
 // 1. Get a list of surveys
         JSONArray ss;
@@ -73,7 +45,7 @@ public class Sync {
 
 // 2. For each survey get CSV responses
         for (int i = 0; i < ss.length(); i++) {
-            httpGet = new HttpGet(FLUID_SURVEYS_URL + "/api/v2/surveys/" + ss.getJSONObject(i).get("id") + "/csv/");
+            httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + ss.getJSONObject(i).get("id") + "/csv/");
             response1 = httpclient.execute(httpGet);
             try {
                 HttpEntity entity1 = response1.getEntity();
@@ -100,7 +72,7 @@ public class Sync {
         PreparedStatement stmt = null;
         ResultSet rs = null;
         try {
-            conn = DriverManager.getConnection(MYSQL_URL);
+            conn = DriverManager.getConnection(Config.MYSQL_URL);
 // Find survey
             stmt = conn.prepareStatement("SELECT id FROM surveys WHERE id = ?");
             stmt.setInt(1, s.getInt("id"));
@@ -175,7 +147,7 @@ public class Sync {
             int[] question_id = new int[l.size()];
             int meta_question_id;
             int response_id;
-            conn = DriverManager.getConnection(MYSQL_URL);
+            conn = DriverManager.getConnection(Config.MYSQL_URL);
             for (int i = STANDARD_HEADERS; i < l.size(); i++) {
                 System.out.println(l.get(i));
 // Find question

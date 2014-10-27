@@ -32,5 +32,6 @@ public class Config {
                 config.getProperty("SRS.Password") + "@(DESCRIPTION=(ADDRESS=(PROTOCOL=tcp)(PORT=1521)(HOST=" +
                 config.getProperty("SRS.Host") + "))(CONNECT_DATA=(SERVICE_NAME=" +
                 config.getProperty("SRS.ServiceName") + ")))";
+        System.out.println("Config read OK.");
     }
 }
