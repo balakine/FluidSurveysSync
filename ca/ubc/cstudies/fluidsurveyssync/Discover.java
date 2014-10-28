@@ -1,5 +1,6 @@
 package ca.ubc.cstudies.fluidsurveyssync;
 
+import oracle.jdbc.pool.OracleDataSource;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.client.methods.HttpGet;
@@ -16,6 +17,9 @@ import javax.net.ssl.SSLContext;
 import java.io.IOException;
 import java.security.NoSuchAlgorithmException;
 import java.security.KeyManagementException;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 
 public class Discover {
@@ -27,7 +31,7 @@ public class Discover {
         SyncSurveys();
     }
 
-    static void SyncSurveys() throws IOException, NoSuchAlgorithmException, KeyManagementException, SQLException {
+    static void SyncSurveys() throws NoSuchAlgorithmException, KeyManagementException, SQLException, IOException {
         SSLContext sslContext = SSLContexts.custom()
             .useTLS() // Only this turned out to be not enough
             .build();
@@ -55,7 +59,9 @@ public class Discover {
 
         for (int i = 0; i < surveys.length(); i++) {
             survey = surveys.getJSONObject(i);
-            System.out.println(survey.getLong("id") + ";" + survey.getString("name"));
+            Sync.AddUpdateSurvey(survey);
+//            resolveSectionId(survey.getString("name"));
+//            System.out.println(survey.getLong("id") + ";" + survey.getString("name"));
         }
 /*
         Map <String, Integer> idnames = new HashMap<String, Integer>();
@@ -86,5 +92,42 @@ public class Discover {
         }
         System.out.println("ID name: " + idnames);
         */
+    }
+    private static Integer resolveSectionId(String code) throws SQLException {
+        Integer sectionId;
+        // Open database connection
+        OracleDataSource ods = new OracleDataSource();
+        ods.setURL(Config.SRS_URL);
+        Connection conn = ods.getConnection();
+
+        // Create a Statement
+        PreparedStatement stmt = conn.prepareStatement("SELECT " +
+                        "SECTION.SECTION_ID, " +
+        		        "COURSE.COURSE_CODE || TERM.TERM_CODE || SECTION.SECTION_CODE " +
+        	        "FROM SECTION " +
+        		        "LEFT JOIN TERM ON SECTION.TERM_ID = TERM.TERM_ID " +
+        		        "LEFT JOIN SECTION_COURSE ON SECTION.SECTION_ID = SECTION_COURSE.SECTION_ID " +
+        		        "LEFT JOIN COURSE ON SECTION_COURSE.COURSE_ID = COURSE.COURSE_ID " +
+                "WHERE COURSE.COURSE_CODE || TERM.TERM_CODE || SECTION.SECTION_CODE = ?");
+        stmt.setString(1, code);
+        ResultSet rset = stmt.executeQuery();
+        if (rset.next()) {
+            System.out.println ("Found! Section id: " + rset.getInt(1) + ", section Code:" + rset.getString(2));
+            sectionId = rset.getInt(1);
+        } else {
+            System.out.println ("Not found! Section Code: " + code);
+            sectionId = null;
+        }
+        // Close the ResultSet
+        rset.close();
+        rset =  null;
+        // Close the Statement
+        stmt.close();
+        stmt = null;
+        // Close the connection
+        conn.close();
+        conn = null;
+
+        return sectionId;
     }
 }

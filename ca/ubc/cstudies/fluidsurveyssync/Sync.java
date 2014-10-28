@@ -1,5 +1,6 @@
 package ca.ubc.cstudies.fluidsurveyssync;
 
+import oracle.jdbc.pool.OracleDataSource;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.methods.HttpGet;
@@ -61,7 +62,8 @@ public class Sync {
         }
     }
 
-    private static void AddUpdateSurvey(JSONObject s) {
+    public static void AddUpdateSurvey(JSONObject s) {
+/*
         try {
 // The newInstance() call is a work around for some
 // broken Java implementations
@@ -70,6 +72,7 @@ public class Sync {
 // handle the error
             System.out.println("SQLException: " + ex.getMessage());
         }
+*/
         Connection conn = null;
         PreparedStatement stmt = null;
         ResultSet rs = null;
@@ -81,15 +84,17 @@ public class Sync {
             rs = stmt.executeQuery();
             if (rs.next()) {
 // Survey found
-                stmt = conn.prepareStatement("UPDATE surveys SET name = ? WHERE id = ?");
+                stmt = conn.prepareStatement("UPDATE surveys SET name = ?, section_id = ? WHERE id = ?");
                 stmt.setString(1, left(s.getString("name"), SURVEY_NAME_LENGTH));
-                stmt.setInt(2, s.getInt("id"));
+                stmt.setObject(2, resolveSectionId(s.getString("name")), Types.INTEGER);
+                stmt.setInt(3, s.getInt("id"));
                 stmt.executeUpdate();
             } else {
 // New survey
-                stmt = conn.prepareStatement("INSERT INTO surveys SET id = ?, name = ?");
+                stmt = conn.prepareStatement("INSERT INTO surveys SET id = ?, name = ?, section_id = ?");
                 stmt.setInt(1, s.getInt("id"));
                 stmt.setString(2, left(s.getString("name"), SURVEY_NAME_LENGTH));
+                stmt.setObject(3, resolveSectionId(s.getString("name")), Types.INTEGER);
                 stmt.executeUpdate();
             }
 
@@ -134,6 +139,7 @@ public class Sync {
         l = ParseLine(r);
         if (l.size() < STANDARD_HEADERS)
             throw new IOException("CSV Format error - expected at least " + STANDARD_HEADERS + " columns, found " + l.size());
+/*
         try {
 // The newInstance() call is a work around for some
 // broken Java implementations
@@ -142,6 +148,7 @@ public class Sync {
 // handle the error
             System.out.println("SQLException: " + ex.getMessage());
         }
+*/
         Connection conn = null;
         PreparedStatement stmt = null;
         ResultSet rs = null;
@@ -318,6 +325,43 @@ public class Sync {
         return l.size() == 0 ? null : l;
     }
 
+    public static Integer resolveSectionId(String code) throws SQLException {
+        Integer sectionId;
+        // Open database connection
+        OracleDataSource ods = new OracleDataSource();
+        ods.setURL(Config.SRS_URL);
+        Connection conn = ods.getConnection();
+
+        // Create a Statement
+        PreparedStatement stmt = conn.prepareStatement("SELECT " +
+                        "SECTION.SECTION_ID, " +
+        		        "COURSE.COURSE_CODE || TERM.TERM_CODE || SECTION.SECTION_CODE " +
+        	        "FROM SECTION " +
+        		        "LEFT JOIN TERM ON SECTION.TERM_ID = TERM.TERM_ID " +
+        		        "LEFT JOIN SECTION_COURSE ON SECTION.SECTION_ID = SECTION_COURSE.SECTION_ID " +
+        		        "LEFT JOIN COURSE ON SECTION_COURSE.COURSE_ID = COURSE.COURSE_ID " +
+                "WHERE ? LIKE COURSE.COURSE_CODE || TERM.TERM_CODE || SECTION.SECTION_CODE || '%'");
+        stmt.setString(1, code);
+        ResultSet rset = stmt.executeQuery();
+        if (rset.next()) {
+            System.out.println ("Found! Section id: " + rset.getInt(1) + ", section Code:" + rset.getString(2));
+            sectionId = rset.getInt(1);
+        } else {
+            System.out.println ("Not found! Section Code: " + code);
+            sectionId = null;
+        }
+        // Close the ResultSet
+        rset.close();
+        rset =  null;
+        // Close the Statement
+        stmt.close();
+        stmt = null;
+        // Close the connection
+        conn.close();
+        conn = null;
+
+        return sectionId;
+    }
     private static String left(String s, int l) {
         return s.substring(0, Math.min(l, s.length()));
     }

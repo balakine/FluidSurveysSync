@@ -6,7 +6,7 @@ import java.sql.*;
 
 public class Srs {
     public static void main(String[] args) throws SQLException {
-        String survey_title = "LC304W15Z";
+        String survey_title = "IL660F14A-9";
         // Open database connection
         OracleDataSource ods = new OracleDataSource();
         ods.setURL(Config.SRS_URL);
@@ -20,7 +20,7 @@ public class Srs {
         		        "LEFT JOIN TERM ON SECTION.TERM_ID = TERM.TERM_ID " +
         		        "LEFT JOIN SECTION_COURSE ON SECTION.SECTION_ID = SECTION_COURSE.SECTION_ID " +
         		        "LEFT JOIN COURSE ON SECTION_COURSE.COURSE_ID = COURSE.COURSE_ID " +
-                "WHERE COURSE.COURSE_CODE || TERM.TERM_CODE || SECTION.SECTION_CODE = ?");
+                "WHERE ? LIKE COURSE.COURSE_CODE || TERM.TERM_CODE || SECTION.SECTION_CODE || '%'");
         stmt.setString(1, survey_title);
         // Select the USER column from the dual table
         ResultSet rset = stmt.executeQuery();
