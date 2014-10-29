@@ -1,6 +1,5 @@
 package ca.ubc.cstudies.fluidsurveyssync;
 
-import oracle.jdbc.pool.OracleDataSource;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.client.methods.HttpGet;
@@ -20,13 +19,12 @@ import java.io.InputStreamReader;
 import java.security.NoSuchAlgorithmException;
 import java.security.KeyManagementException;
 import java.sql.*;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 public class Discover {
     private static int SURVEY_NAME_LENGTH = 100;
-    private static int QUESTION_HEADER_LENGTH =200;
+    private static int QUESTION_HEADER_LENGTH = 4000;
     private static int ANSWER_VALUE_LENGTH = 200;
 
     public static void main(String[] args) throws IOException, KeyManagementException, NoSuchAlgorithmException {
@@ -45,9 +43,9 @@ public class Discover {
         .build();
 
 // 1. Get a list of surveys
+        JSONArray surveys;
         HttpGet httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/");
         HttpResponse response = httpClient.execute(httpGet);
-        JSONArray surveys, pages, questions;
         try {
             HttpEntity entity = response.getEntity();
             surveys = (new JSONObject(new JSONTokener(entity.getContent()))).getJSONArray("surveys");
@@ -57,12 +55,14 @@ public class Discover {
         }
 
 // 2. Process each survey
-        JSONObject survey, question;
+        JSONObject survey;
         for (int i = 0; i < surveys.length(); i++) {
             survey = surveys.getJSONObject(i);
 //            System.out.println("ID: " + survey.get("id") + ", Name: " + survey.get("name"));
             Sync.AddUpdateSurvey(survey);
 
+// 3. Get full questions (titles) from the survey structure
+            JSONArray pages;
             httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + survey.get("id") + "/?structure");
             response = httpClient.execute(httpGet);
             try {
@@ -72,49 +72,16 @@ public class Discover {
             } finally {
                 httpGet.releaseConnection();
             }
+            Map<String, String> titles = Sync.findTitles(pages);
 
-// 3. For each page get a list of questions
-            Map<String, String> idnames = new HashMap<>();
-            for (int j = 0; j < pages.length(); j++) {
-                questions = pages.getJSONObject(j).getJSONArray("children");
-
-                // 4. For each question add to a Map
-                for (int k = 0; k < questions.length(); k++) {
-                    question = questions.getJSONObject(k);
-                    switch (question.getString("idname")) {
-                        case "multiple-choice":
-                            // add children and "/text" for "Other" option, if needed
-                            break;
-                        case "ranking":
-                        case "single-choice-grid":
-                        case "text-response-grid":
-                            // add children
-                            break;
-                        case "single-choice":
-                            idnames.put("{" + question.getString("id") + "}", question.getJSONObject("title").getString("en"));
-                            // add "/other" if needed
-                            String other = Sync.hasOther(question);
-                            if (other != null)
-                                idnames.put("{" + question.getString("id") + "\\other}",
-                                        question.getJSONObject("title").getString("en") + " | " + other);
-                            break;
-                        case "boolean-choice":
-                        case "dropdown-choice":
-                        case "text-response":
-                        default:
-                            idnames.put("{" + question.getString("id") + "}", question.getJSONObject("title").getString("en"));
-                            break;
-                    }
-                }
-            }
-
+// 4. Get responses with question ids in the headers
             httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + survey.get("id") + "/csv/?include_id=1&show_titles=0");
             response = httpClient.execute(httpGet);
             try {
                 HttpEntity entity = response.getEntity();
                 BufferedReader isr = new BufferedReader(new InputStreamReader(entity.getContent(), "UTF-16LE"));
                 isr.skip(1); // skip unicode marker
-                AddUpdateResponses(isr, survey.getInt("id"), idnames);
+                AddUpdateResponses(isr, survey.getInt("id"), titles);
                 EntityUtils.consume(entity);
             } finally {
                 httpGet.releaseConnection();
@@ -124,7 +91,7 @@ public class Discover {
 
     private static int STANDARD_HEADERS = 17;
 
-    public static void AddUpdateResponses(BufferedReader r, int survey_id, Map<String, String> idnames) throws IOException {
+    public static void AddUpdateResponses(BufferedReader r, int survey_id, Map<String, String> titles) throws IOException {
         List<String> l;
         // get headers
         l = Sync.ParseLine(r);
@@ -149,11 +116,13 @@ public class Discover {
             int response_id;
             conn = DriverManager.getConnection(Config.MYSQL_URL);
             for (int i = STANDARD_HEADERS; i < l.size(); i++) {
+                String fs_id = l.get(i).substring(0, l.get(i).indexOf("}") + 1);
+                String title = titles.get(fs_id);
 //                System.out.println(l.get(i));
 // Find question
-                stmt = conn.prepareStatement("SELECT id FROM questions WHERE survey_id = ? AND header = ?");
+                stmt = conn.prepareStatement("SELECT id FROM questions WHERE survey_id = ? AND fs_id = ?");
                 stmt.setInt(1, survey_id);
-                stmt.setString(2, Sync.left(l.get(i), QUESTION_HEADER_LENGTH));
+                stmt.setString(2, fs_id);
                 rs = stmt.executeQuery();
                 if (rs.next()) {
                     question_id[i] = rs.getInt("id");
@@ -161,7 +130,7 @@ public class Discover {
                 } else {
 // Find meta-question
                     stmt = conn.prepareStatement("SELECT id FROM meta_questions WHERE header = ?");
-                    stmt.setString(1, Sync.left(l.get(i), QUESTION_HEADER_LENGTH));
+                    stmt.setString(1, Sync.left(title, QUESTION_HEADER_LENGTH));
                     rs = stmt.executeQuery();
                     if (rs.next()) {
 // Meta-question found
@@ -169,7 +138,7 @@ public class Discover {
                     } else {
 // New meta-question
                         stmt = conn.prepareStatement("INSERT INTO meta_questions SET header = ?", Statement.RETURN_GENERATED_KEYS);
-                        stmt.setString(1, Sync.left(l.get(i), QUESTION_HEADER_LENGTH));
+                        stmt.setString(1, Sync.left(title, QUESTION_HEADER_LENGTH));
                         stmt.executeUpdate();
                         rs = stmt.getGeneratedKeys();
                         if (rs.next()) {
@@ -178,15 +147,12 @@ public class Discover {
                             throw new IOException("Couldn't create a new meta-question");
                         }
                     }
-                    String fs_id = l.get(i).substring(1, 11); // get FS question id - TODO
-                    String fs_idname = idnames.get(fs_id); // match header to question idname
 // New question
-                    stmt = conn.prepareStatement("INSERT INTO questions SET survey_id = ?, meta_question_id = ?, header = ?, fs_id = ?, fs_idname = ?", Statement.RETURN_GENERATED_KEYS);
+                    stmt = conn.prepareStatement("INSERT INTO questions SET survey_id = ?, meta_question_id = ?, header = ?, fs_id = ?", Statement.RETURN_GENERATED_KEYS);
                     stmt.setInt(1, survey_id);
                     stmt.setInt(2, meta_question_id);
-                    stmt.setString(3, Sync.left(l.get(i), QUESTION_HEADER_LENGTH));
-                    stmt.setObject(4, fs_id, Types.VARCHAR);
-                    stmt.setObject(5, fs_idname, Types.VARCHAR);
+                    stmt.setString(3, Sync.left(title, QUESTION_HEADER_LENGTH));
+                    stmt.setString(4, fs_id);
                     stmt.executeUpdate();
                     rs = stmt.getGeneratedKeys();
                     if (rs.next()) {

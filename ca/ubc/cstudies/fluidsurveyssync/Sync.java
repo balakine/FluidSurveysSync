@@ -21,13 +21,19 @@ import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 public class Sync {
     private static int SURVEY_NAME_LENGTH = 100;
-    private static int QUESTION_HEADER_LENGTH =200;
+    private static int QUESTION_HEADER_LENGTH = 4000;
     private static int ANSWER_VALUE_LENGTH = 200;
+
+    private static int surveyCount;
+    private static int questionCount;
+    private static int uniqueQuestionCount;
+    private static int responseCount;
 
     public static void main(String[] args) throws IOException, KeyManagementException, NoSuchAlgorithmException {
 
@@ -45,36 +51,50 @@ public class Sync {
         .build();
 
 // 1. Get a list of surveys
-        HttpGet httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/");
-        HttpResponse response1 = httpClient.execute(httpGet);
         JSONArray surveys;
+        HttpGet httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/");
+        HttpResponse response = httpClient.execute(httpGet);
         try {
-            HttpEntity entity1 = response1.getEntity();
-            surveys = (new JSONObject(new JSONTokener(entity1.getContent()))).getJSONArray("surveys");
-            EntityUtils.consume(entity1);
+            HttpEntity entity = response.getEntity();
+            surveys = (new JSONObject(new JSONTokener(entity.getContent()))).getJSONArray("surveys");
+            EntityUtils.consume(entity);
         } finally {
             httpGet.releaseConnection();
         }
 
-// 2. For each survey get CSV responses
+// 2. Process each survey
         JSONObject survey;
         for (int i = 0; i < surveys.length(); i++) {
             survey = surveys.getJSONObject(i);
-            System.out.println("ID: " + survey.get("id") + ", Name: " + survey.get("name"));
             AddUpdateSurvey(survey);
 
-            httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + survey.get("id") + "/csv/");
-            response1 = httpClient.execute(httpGet);
+// 3. Get full questions (titles) from the survey structure
+            JSONArray pages;
+            httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + survey.get("id") + "/?structure");
+            response = httpClient.execute(httpGet);
             try {
-                HttpEntity entity1 = response1.getEntity();
-                BufferedReader isr = new BufferedReader(new InputStreamReader(entity1.getContent(), "UTF-16LE"));
+                HttpEntity entity = response.getEntity();
+                pages = (new JSONObject(new JSONTokener(entity.getContent()))).getJSONArray("form");
+                EntityUtils.consume(entity);
+            } finally {
+                httpGet.releaseConnection();
+            }
+            Map<String, String> titles = Sync.findTitles(pages);
+
+// 4. Get responses with question ids in the headers
+            httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + survey.get("id") + "/csv/?include_id=1&show_titles=0");
+            response = httpClient.execute(httpGet);
+            try {
+                HttpEntity entity = response.getEntity();
+                BufferedReader isr = new BufferedReader(new InputStreamReader(entity.getContent(), "UTF-16LE"));
                 isr.skip(1); // skip unicode marker
-                AddUpdateResponses(isr, survey.getInt("id"), null);
-                EntityUtils.consume(entity1);
+                AddUpdateResponses(isr, survey.getInt("id"), titles);
+                EntityUtils.consume(entity);
             } finally {
                 httpGet.releaseConnection();
             }
         }
+        System.out.println("Processed: " + surveyCount + " surveys, " + questionCount + " questions, " + uniqueQuestionCount + " unique questions, " + responseCount + " responses.");
     }
 
     public static void AddUpdateSurvey(JSONObject s) {
@@ -144,11 +164,12 @@ public class Sync {
                 conn = null;
             }
         }
+        surveyCount++;
     }
 
     private static int STANDARD_HEADERS = 17;
 
-    public static void AddUpdateResponses(BufferedReader r, int survey_id, Map<String, String> idnames) throws IOException {
+    public static void AddUpdateResponses(BufferedReader r, int survey_id, Map<String, String> titles) throws IOException {
         List<String> l;
         // get headers
         l = ParseLine(r);
@@ -173,19 +194,21 @@ public class Sync {
             int response_id;
             conn = DriverManager.getConnection(Config.MYSQL_URL);
             for (int i = STANDARD_HEADERS; i < l.size(); i++) {
-                System.out.println(l.get(i));
+                String fs_id = l.get(i).substring(0, l.get(i).indexOf("}") + 1);
+                String title = titles.get(fs_id);
 // Find question
-                stmt = conn.prepareStatement("SELECT id FROM questions WHERE survey_id = ? AND header = ?");
+                stmt = conn.prepareStatement("SELECT id FROM questions WHERE survey_id = ? AND fs_id = ?");
                 stmt.setInt(1, survey_id);
-                stmt.setString(2, left(l.get(i), QUESTION_HEADER_LENGTH));
+                stmt.setString(2, fs_id);
                 rs = stmt.executeQuery();
                 if (rs.next()) {
-                    question_id[i] = rs.getInt("id");
 // Question found
+                    question_id[i] = rs.getInt("id");
+// TODO Update the question
                 } else {
 // Find meta-question
                     stmt = conn.prepareStatement("SELECT id FROM meta_questions WHERE header = ?");
-                    stmt.setString(1, left(l.get(i), QUESTION_HEADER_LENGTH));
+                    stmt.setString(1, left(title, QUESTION_HEADER_LENGTH));
                     rs = stmt.executeQuery();
                     if (rs.next()) {
 // Meta-question found
@@ -193,7 +216,7 @@ public class Sync {
                     } else {
 // New meta-question
                         stmt = conn.prepareStatement("INSERT INTO meta_questions SET header = ?", Statement.RETURN_GENERATED_KEYS);
-                        stmt.setString(1, left(l.get(i), QUESTION_HEADER_LENGTH));
+                        stmt.setString(1, left(title, QUESTION_HEADER_LENGTH));
                         stmt.executeUpdate();
                         rs = stmt.getGeneratedKeys();
                         if (rs.next()) {
@@ -201,16 +224,14 @@ public class Sync {
                         } else {
                             throw new IOException("Couldn't create a new meta-question");
                         }
+                        uniqueQuestionCount++;
                     }
-                    String fs_id = l.get(i).substring(1, 11);
-                    String fs_idname = idnames.get(fs_id); // match header to question idname
 // New question
-                    stmt = conn.prepareStatement("INSERT INTO questions SET survey_id = ?, meta_question_id = ?, header = ?, fs_id = ?, fs_idname = ?", Statement.RETURN_GENERATED_KEYS);
+                    stmt = conn.prepareStatement("INSERT INTO questions SET survey_id = ?, meta_question_id = ?, header = ?, fs_id = ?", Statement.RETURN_GENERATED_KEYS);
                     stmt.setInt(1, survey_id);
                     stmt.setInt(2, meta_question_id);
-                    stmt.setString(3, left(l.get(i), QUESTION_HEADER_LENGTH));
-                    stmt.setObject(4, fs_id, Types.VARCHAR);
-                    stmt.setObject(5, fs_idname, Types.VARCHAR);
+                    stmt.setString(3, left(title, QUESTION_HEADER_LENGTH));
+                    stmt.setString(4, fs_id);
                     stmt.executeUpdate();
                     rs = stmt.getGeneratedKeys();
                     if (rs.next()) {
@@ -219,6 +240,7 @@ public class Sync {
                         throw new IOException("Couldn't create a new question");
                     }
                 }
+                questionCount++;
             }
             // cycle through lines until EOF
             while ((l = ParseLine(r)) != null) {
@@ -263,9 +285,8 @@ public class Sync {
                         stmt.setString(3, left(l.get(i), ANSWER_VALUE_LENGTH));
                         stmt.executeUpdate();
                     }
-                    System.out.print(l.get(i) + '\t');
                 }
-                System.out.println("");
+                responseCount++;
             }
         } catch (SQLException ex) {// handle any errors
             System.out.println("SQLException: " + ex.getMessage());
@@ -363,10 +384,8 @@ public class Sync {
         stmt.setString(1, code);
         ResultSet rset = stmt.executeQuery();
         if (rset.next()) {
-//            System.out.println ("Found! Section id: " + rset.getInt(1) + ", section Code:" + rset.getString(2));
             sectionId = rset.getInt(1);
         } else {
-//            System.out.println ("Not found! Section Code: " + code);
             sectionId = null;
         }
         // Close the ResultSet
@@ -384,25 +403,73 @@ public class Sync {
     public static String left(String s, int l) {
         return s.substring(0, Math.min(l, s.length()));
     }
-    public static String hasOther(JSONObject question) {
-        if (!question.has("children")) {
-            System.out.println("The question has no children: " + question);
-        } else {
-            // Get the first child. It's an assumption that there ALWAYS is one and only one child.
-            JSONObject child = question.getJSONArray("children").getJSONObject(0);
-            if (!child.has("choices")) {
-                System.out.println("The question has no choices: " + question);
-            } else {
-                JSONArray choices = child.getJSONArray("choices");
-                for (int i = 0; i < choices.length(); i++) {
-                    JSONObject choice = choices.getJSONObject(i);
-                    if (choice.has("other")) {
-                        // It's an assumption that every choice has an English label
-                        return choice.getJSONObject("label").getString("en");
-                    }
+    public static Map<String, String> findTitles(JSONArray pages) {
+        Map<String, String> titles = new HashMap<>();
+        JSONArray questions;
+        JSONObject question;
+        for (int j = 0; j < pages.length(); j++) {
+            questions = pages.getJSONObject(j).getJSONArray("children");
+
+            JSONArray choices;
+            // 4. For each question add to a Map
+            for (int k = 0; k < questions.length(); k++) {
+                question = questions.getJSONObject(k);
+                switch (question.getString("idname")) {
+                    case "section-separator":
+                        break;
+                    case "multiple-choice":
+                        // Add choices. It's an assumption that JSON structure is ALWAYS like this.
+                        choices = question.getJSONArray("children").getJSONObject(0).getJSONArray("choices");
+                        for (int l = 0; l < choices.length(); l++) {
+                            JSONObject choice = choices.getJSONObject(l);
+                            // It's an assumption that every choice has an English label.
+                            titles.put("{" + question.getString("id") + "\\" + l + "}",
+                                    question.getJSONObject("title").getString("en") + " | " +
+                                            choice.getJSONObject("label").getString("en"));
+                            // Add "/text" for "Other" option.
+                            if (choice.has("other")) {
+                                titles.put("{" + question.getString("id") + "\\" + l + "\\text}",
+                                        question.getJSONObject("title").getString("en") + " | " +
+                                                choice.getJSONObject("label").getString("en") + " | text");
+                            }
+                        }
+                        break;
+                    case "ranking":
+                    case "single-choice-grid":
+                    case "text-response-grid":
+                        // Add choices. It's an assumption that JSON structure is ALWAYS like this.
+                        choices = question.getJSONArray("children");
+                        for (int l = 0; l < choices.length(); l++) {
+                            JSONObject choice = choices.getJSONObject(l);
+                            // It's an assumption that every choice has an English label.
+                            titles.put("{" + question.getString("id") + "_" + l + "}",
+                                    question.getJSONObject("title").getString("en") + " | " +
+                                            choice.getJSONObject("label").getString("en"));
+                        }
+                        break;
+                    case "single-choice":
+                        titles.put("{" + question.getString("id") + "}", question.getJSONObject("title").getString("en"));
+                        // Add "/other" if needed. It's an assumption that JSON structure is ALWAYS like this.
+                        choices = question.getJSONArray("children").getJSONObject(0).getJSONArray("choices");
+                        for (int l = 0; l < choices.length(); l++) {
+                            JSONObject choice = choices.getJSONObject(l);
+                            // It's an assumption that every choice has an English label.
+                            if (choice.has("other")) {
+                                titles.put("{" + question.getString("id") + "\\other}",
+                                        question.getJSONObject("title").getString("en") + " | " +
+                                                choice.getJSONObject("label").getString("en") + " | text");
+                            }
+                        }
+                        break;
+                    case "boolean-choice":
+                    case "dropdown-choice":
+                    case "text-response":
+                    default:
+                        titles.put("{" + question.getString("id") + "}", question.getJSONObject("title").getString("en"));
+                        break;
                 }
             }
         }
-        return null;
+        return titles;
     }
 }
