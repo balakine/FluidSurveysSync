@@ -4,34 +4,49 @@ import oracle.jdbc.pool.OracleDataSource;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
+import org.apache.http.conn.ssl.SSLContexts;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
+import javax.net.ssl.SSLContext;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public class Sync {
     private static int SURVEY_NAME_LENGTH = 100;
     private static int QUESTION_HEADER_LENGTH =200;
     private static int ANSWER_VALUE_LENGTH = 200;
 
-    public static void main(String[] args) throws IOException {
-        SyncSurveys();
-    }
+    public static void main(String[] args) throws IOException, KeyManagementException, NoSuchAlgorithmException {
 
-    static void SyncSurveys() throws IOException {
+// Workaround for disabled SSL3 on fluidsurveys.com
+        SSLContext sslContext = SSLContexts.custom()
+            .useTLS() // Only this turned out to be not enough
+            .build();
+        SSLConnectionSocketFactory sf = new SSLConnectionSocketFactory(
+            sslContext,
+            new String[] {"TLSv1", "TLSv1.1", "TLSv1.2"},
+            null,
+            SSLConnectionSocketFactory.BROWSER_COMPATIBLE_HOSTNAME_VERIFIER);
+        CloseableHttpClient httpClient = HttpClients.custom()
+        .setSSLSocketFactory(sf)
+        .build();
 
-        DefaultHttpClient httpclient = new DefaultHttpClient();
-        HttpGet httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/");
-        HttpResponse response1 = httpclient.execute(httpGet);
 // 1. Get a list of surveys
+        HttpGet httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/");
+        HttpResponse response1 = httpClient.execute(httpGet);
         JSONArray surveys;
         try {
             HttpEntity entity1 = response1.getEntity();
@@ -49,12 +64,12 @@ public class Sync {
             AddUpdateSurvey(survey);
 
             httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + survey.get("id") + "/csv/");
-            response1 = httpclient.execute(httpGet);
+            response1 = httpClient.execute(httpGet);
             try {
                 HttpEntity entity1 = response1.getEntity();
                 BufferedReader isr = new BufferedReader(new InputStreamReader(entity1.getContent(), "UTF-16LE"));
                 isr.skip(1); // skip unicode marker
-                AddUpdateResponses(isr, survey.getInt("id"));
+                AddUpdateResponses(isr, survey.getInt("id"), null);
                 EntityUtils.consume(entity1);
             } finally {
                 httpGet.releaseConnection();
@@ -133,7 +148,7 @@ public class Sync {
 
     private static int STANDARD_HEADERS = 17;
 
-    private static void AddUpdateResponses(BufferedReader r, int survey_id) throws IOException {
+    public static void AddUpdateResponses(BufferedReader r, int survey_id, Map<String, String> idnames) throws IOException {
         List<String> l;
         // get headers
         l = ParseLine(r);
@@ -187,11 +202,15 @@ public class Sync {
                             throw new IOException("Couldn't create a new meta-question");
                         }
                     }
+                    String fs_id = l.get(i).substring(1, 11);
+                    String fs_idname = idnames.get(fs_id); // match header to question idname
 // New question
-                    stmt = conn.prepareStatement("INSERT INTO questions SET survey_id = ?, meta_question_id = ?, header = ?", Statement.RETURN_GENERATED_KEYS);
+                    stmt = conn.prepareStatement("INSERT INTO questions SET survey_id = ?, meta_question_id = ?, header = ?, fs_id = ?, fs_idname = ?", Statement.RETURN_GENERATED_KEYS);
                     stmt.setInt(1, survey_id);
                     stmt.setInt(2, meta_question_id);
                     stmt.setString(3, left(l.get(i), QUESTION_HEADER_LENGTH));
+                    stmt.setObject(4, fs_id, Types.VARCHAR);
+                    stmt.setObject(5, fs_idname, Types.VARCHAR);
                     stmt.executeUpdate();
                     rs = stmt.getGeneratedKeys();
                     if (rs.next()) {
@@ -281,7 +300,7 @@ public class Sync {
         }
     }
 
-    private static List<String> ParseLine(BufferedReader r) throws IOException {
+    public static List<String> ParseLine(BufferedReader r) throws IOException {
         List<String> l = new ArrayList<String>();
         int i;
         Boolean tf = false;
@@ -344,10 +363,10 @@ public class Sync {
         stmt.setString(1, code);
         ResultSet rset = stmt.executeQuery();
         if (rset.next()) {
-            System.out.println ("Found! Section id: " + rset.getInt(1) + ", section Code:" + rset.getString(2));
+//            System.out.println ("Found! Section id: " + rset.getInt(1) + ", section Code:" + rset.getString(2));
             sectionId = rset.getInt(1);
         } else {
-            System.out.println ("Not found! Section Code: " + code);
+//            System.out.println ("Not found! Section Code: " + code);
             sectionId = null;
         }
         // Close the ResultSet
@@ -362,7 +381,28 @@ public class Sync {
 
         return sectionId;
     }
-    private static String left(String s, int l) {
+    public static String left(String s, int l) {
         return s.substring(0, Math.min(l, s.length()));
+    }
+    public static String hasOther(JSONObject question) {
+        if (!question.has("children")) {
+            System.out.println("The question has no children: " + question);
+        } else {
+            // Get the first child. It's an assumption that there ALWAYS is one and only one child.
+            JSONObject child = question.getJSONArray("children").getJSONObject(0);
+            if (!child.has("choices")) {
+                System.out.println("The question has no choices: " + question);
+            } else {
+                JSONArray choices = child.getJSONArray("choices");
+                for (int i = 0; i < choices.length(); i++) {
+                    JSONObject choice = choices.getJSONObject(i);
+                    if (choice.has("other")) {
+                        // It's an assumption that every choice has an English label
+                        return choice.getJSONObject("label").getString("en");
+                    }
+                }
+            }
+        }
+        return null;
     }
 }
