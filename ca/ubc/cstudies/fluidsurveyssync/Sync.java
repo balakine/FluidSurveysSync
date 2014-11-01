@@ -12,6 +12,7 @@ import org.apache.http.util.EntityUtils;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
+import org.jsoup.Jsoup;
 
 import javax.net.ssl.SSLContext;
 import java.io.BufferedReader;
@@ -79,7 +80,7 @@ public class Sync {
             } finally {
                 httpGet.releaseConnection();
             }
-            Map<String, String> titles = Sync.findTitles(pages);
+            Map<String, String> titles = findTitles(pages);
 
 // 4. Get responses with question ids in the headers
             httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + survey.get("id") + "/csv/?include_id=1&show_titles=0");
@@ -93,8 +94,8 @@ public class Sync {
             } finally {
                 httpGet.releaseConnection();
             }
+            System.out.println("Processed: " + surveyCount + " surveys, " + questionCount + " questions, " + uniqueQuestionCount + " unique questions, " + responseCount + " responses.");
         }
-        System.out.println("Processed: " + surveyCount + " surveys, " + questionCount + " questions, " + uniqueQuestionCount + " unique questions, " + responseCount + " responses.");
     }
 
     public static void AddUpdateSurvey(JSONObject s) {
@@ -424,12 +425,12 @@ public class Sync {
                             JSONObject choice = choices.getJSONObject(l);
                             // It's an assumption that every choice has an English label.
                             titles.put("{" + question.getString("id") + "\\" + l + "}",
-                                    question.getJSONObject("title").getString("en") + " | " +
+                                    getQuestionTitle(question) + " | " +
                                             choice.getJSONObject("label").getString("en"));
                             // Add "/text" for "Other" option.
                             if (choice.has("other")) {
                                 titles.put("{" + question.getString("id") + "\\" + l + "\\text}",
-                                        question.getJSONObject("title").getString("en") + " | " +
+                                        getQuestionTitle(question) + " | " +
                                                 choice.getJSONObject("label").getString("en") + " | text");
                             }
                         }
@@ -443,12 +444,12 @@ public class Sync {
                             JSONObject choice = choices.getJSONObject(l);
                             // It's an assumption that every choice has an English label.
                             titles.put("{" + question.getString("id") + "_" + l + "}",
-                                    question.getJSONObject("title").getString("en") + " | " +
+                                    getQuestionTitle(question) + " | " +
                                             choice.getJSONObject("label").getString("en"));
                         }
                         break;
                     case "single-choice":
-                        titles.put("{" + question.getString("id") + "}", question.getJSONObject("title").getString("en"));
+                        titles.put("{" + question.getString("id") + "}", getQuestionTitle(question));
                         // Add "/other" if needed. It's an assumption that JSON structure is ALWAYS like this.
                         choices = question.getJSONArray("children").getJSONObject(0).getJSONArray("choices");
                         for (int l = 0; l < choices.length(); l++) {
@@ -456,7 +457,7 @@ public class Sync {
                             // It's an assumption that every choice has an English label.
                             if (choice.has("other")) {
                                 titles.put("{" + question.getString("id") + "\\other}",
-                                        question.getJSONObject("title").getString("en") + " | " +
+                                        getQuestionTitle(question) + " | " +
                                                 choice.getJSONObject("label").getString("en") + " | text");
                             }
                         }
@@ -465,11 +466,15 @@ public class Sync {
                     case "dropdown-choice":
                     case "text-response":
                     default:
-                        titles.put("{" + question.getString("id") + "}", question.getJSONObject("title").getString("en"));
+                        titles.put("{" + question.getString("id") + "}", getQuestionTitle(question));
                         break;
                 }
             }
         }
         return titles;
+    }
+    private static String getQuestionTitle(JSONObject question) {
+        // It's an assumption that every question has an English title.
+        return Jsoup.parseBodyFragment(question.getJSONObject("title").getString("en")).text();
     }
 }

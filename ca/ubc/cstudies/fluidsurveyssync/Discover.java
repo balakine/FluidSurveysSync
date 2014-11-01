@@ -27,6 +27,8 @@ public class Discover {
     private static int QUESTION_HEADER_LENGTH = 4000;
     private static int ANSWER_VALUE_LENGTH = 200;
 
+    private static int maxQuestionLength;
+
     public static void main(String[] args) throws IOException, KeyManagementException, NoSuchAlgorithmException {
 
 // Workaround for disabled SSL3 on fluidsurveys.com
@@ -118,6 +120,10 @@ public class Discover {
             for (int i = STANDARD_HEADERS; i < l.size(); i++) {
                 String fs_id = l.get(i).substring(0, l.get(i).indexOf("}") + 1);
                 String title = titles.get(fs_id);
+                if (title.length() > maxQuestionLength) {
+                    maxQuestionLength =  title.length();
+                    System.out.println(maxQuestionLength + " - " + survey_id + " - " + title);
+                }
 //                System.out.println(l.get(i));
 // Find question
                 stmt = conn.prepareStatement("SELECT id FROM questions WHERE survey_id = ? AND fs_id = ?");

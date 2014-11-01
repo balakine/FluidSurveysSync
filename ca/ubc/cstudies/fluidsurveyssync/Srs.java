@@ -1,6 +1,8 @@
 package ca.ubc.cstudies.fluidsurveyssync;
 
 import oracle.jdbc.pool.OracleDataSource;
+import org.json.JSONObject;
+import org.jsoup.Jsoup;
 
 import java.sql.*;
 
@@ -36,5 +38,9 @@ public class Srs {
         // Close the connection
         conn.close();
         conn = null;
+        getQuestionTitle ("<span style=\"font-size: 11px;\"><em>On Desktop: Drag and drop your choices from the left&nbsp;to the right column.</em></span>");
+    }
+    private static void getQuestionTitle(String question) {
+        System.out.println(Jsoup.parseBodyFragment(question).text());
     }
 }
