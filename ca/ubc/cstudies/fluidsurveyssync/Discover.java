@@ -24,7 +24,7 @@ import java.util.Map;
 
 public class Discover {
     private static int SURVEY_NAME_LENGTH = 100;
-    private static int QUESTION_HEADER_LENGTH = 4000;
+    private static int QUESTION_HEADER_LENGTH = 400;
     private static int ANSWER_VALUE_LENGTH = 200;
 
     private static int maxQuestionLength;
