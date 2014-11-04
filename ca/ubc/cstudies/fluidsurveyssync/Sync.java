@@ -50,18 +50,15 @@ public class Sync {
         CloseableHttpClient httpClient = HttpClients.custom()
         .setSSLSocketFactory(sf)
         .build();
+        HttpEntity entity;
 
 // 1. Get a list of surveys
         JSONArray surveys;
         HttpGet httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/");
         HttpResponse response = httpClient.execute(httpGet);
-        try {
-            HttpEntity entity = response.getEntity();
-            surveys = (new JSONObject(new JSONTokener(entity.getContent()))).getJSONArray("surveys");
-            EntityUtils.consume(entity);
-        } finally {
-            httpGet.releaseConnection();
-        }
+        entity = response.getEntity();
+        surveys = (new JSONObject(new JSONTokener(entity.getContent()))).getJSONArray("surveys");
+        EntityUtils.consume(entity);
 
 // 2. Process each survey
         JSONObject survey;
@@ -73,27 +70,19 @@ public class Sync {
             JSONArray pages;
             httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + survey.get("id") + "/?structure");
             response = httpClient.execute(httpGet);
-            try {
-                HttpEntity entity = response.getEntity();
-                pages = (new JSONObject(new JSONTokener(entity.getContent()))).getJSONArray("form");
-                EntityUtils.consume(entity);
-            } finally {
-                httpGet.releaseConnection();
-            }
+            entity = response.getEntity();
+            pages = (new JSONObject(new JSONTokener(entity.getContent()))).getJSONArray("form");
+            EntityUtils.consume(entity);
             Map<String, String> titles = findTitles(pages);
 
 // 4. Get responses with question ids in the headers
             httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + survey.get("id") + "/csv/?include_id=1&show_titles=0");
             response = httpClient.execute(httpGet);
-            try {
-                HttpEntity entity = response.getEntity();
-                BufferedReader isr = new BufferedReader(new InputStreamReader(entity.getContent(), "UTF-16LE"));
-                isr.skip(1); // skip unicode marker
-                AddUpdateResponses(isr, survey.getInt("id"), titles);
-                EntityUtils.consume(entity);
-            } finally {
-                httpGet.releaseConnection();
-            }
+            entity = response.getEntity();
+            BufferedReader isr = new BufferedReader(new InputStreamReader(entity.getContent(), "UTF-16LE"));
+            isr.skip(1); // skip unicode marker
+            AddUpdateResponses(isr, survey.getInt("id"), titles);
+            EntityUtils.consume(entity);
             System.out.println("Processed: " + surveyCount + " surveys, " + questionCount + " questions, " + uniqueQuestionCount + " unique questions, " + responseCount + " responses.");
         }
     }
