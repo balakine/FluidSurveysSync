@@ -19,6 +19,7 @@ import java.io.InputStreamReader;
 import java.security.NoSuchAlgorithmException;
 import java.security.KeyManagementException;
 import java.sql.*;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -58,10 +59,11 @@ public class Discover {
 
 // 2. Process each survey
         JSONObject survey;
+        Map<String, Integer> idnames = new HashMap<>();
         for (int i = 0; i < surveys.length(); i++) {
             survey = surveys.getJSONObject(i);
 //            System.out.println("ID: " + survey.get("id") + ", Name: " + survey.get("name"));
-            Sync.AddUpdateSurvey(survey);
+//            Sync.AddUpdateSurvey(survey);
 
 // 3. Get full questions (titles) from the survey structure
             JSONArray pages;
@@ -74,9 +76,23 @@ public class Discover {
             } finally {
                 httpGet.releaseConnection();
             }
-            Map<String, String> titles = Sync.findTitles(pages);
+            JSONArray questions;
+            JSONObject question;
+            for (int j = 0; j < pages.length(); j++) {
+                questions = pages.getJSONObject(j).getJSONArray("children");
+
+                JSONArray choices;
+                // 4. For each question add to a Map
+                for (int k = 0; k < questions.length(); k++) {
+                    question = questions.getJSONObject(k);
+                    Integer l = idnames.get(question.getString("idname"));
+                    idnames.put(question.getString("idname"), l == null ? 1 : ++l);
+                }
+            }
+//            Map<String, String> titles = Sync.findTitles(pages);
 
 // 4. Get responses with question ids in the headers
+/*
             httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + survey.get("id") + "/csv/?include_id=1&show_titles=0");
             response = httpClient.execute(httpGet);
             try {
@@ -88,7 +104,9 @@ public class Discover {
             } finally {
                 httpGet.releaseConnection();
             }
+*/
         }
+        System.out.println(idnames);
     }
 
     private static int STANDARD_HEADERS = 17;

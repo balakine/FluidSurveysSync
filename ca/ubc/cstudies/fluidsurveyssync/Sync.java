@@ -55,8 +55,7 @@ public class Sync {
 // 1. Get a list of surveys
         JSONArray surveys;
         HttpGet httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/");
-        HttpResponse response = httpClient.execute(httpGet);
-        entity = response.getEntity();
+        entity = httpClient.execute(httpGet).getEntity();
         surveys = (new JSONObject(new JSONTokener(entity.getContent()))).getJSONArray("surveys");
         EntityUtils.consume(entity);
 
@@ -69,21 +68,24 @@ public class Sync {
 // 3. Get full questions (titles) from the survey structure
             JSONArray pages;
             httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + survey.get("id") + "/?structure");
-            response = httpClient.execute(httpGet);
-            entity = response.getEntity();
+            entity = httpClient.execute(httpGet).getEntity();
             pages = (new JSONObject(new JSONTokener(entity.getContent()))).getJSONArray("form");
             EntityUtils.consume(entity);
             Map<String, String> titles = findTitles(pages);
 
+            if (titles != null) {
 // 4. Get responses with question ids in the headers
-            httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + survey.get("id") + "/csv/?include_id=1&show_titles=0");
-            response = httpClient.execute(httpGet);
-            entity = response.getEntity();
-            BufferedReader isr = new BufferedReader(new InputStreamReader(entity.getContent(), "UTF-16LE"));
-            isr.skip(1); // skip unicode marker
-            AddUpdateResponses(isr, survey.getInt("id"), titles);
-            EntityUtils.consume(entity);
-            System.out.println("Processed: " + surveyCount + " surveys, " + questionCount + " questions, " + uniqueQuestionCount + " unique questions, " + responseCount + " responses.");
+                httpGet = new HttpGet(Config.FLUID_SURVEYS_URL + "/api/v2/surveys/" + survey.get("id") + "/csv/?include_id=1&show_titles=0");
+                entity = httpClient.execute(httpGet).getEntity();
+                BufferedReader isr = new BufferedReader(new InputStreamReader(entity.getContent(), "UTF-16LE"));
+                isr.skip(1); // skip unicode marker
+                AddUpdateResponses(isr, survey.getInt("id"), titles);
+                EntityUtils.consume(entity);
+
+                System.out.println("Processed: " + surveyCount + " surveys, " + questionCount + " questions, " + uniqueQuestionCount + " unique questions, " + responseCount + " responses.");
+            } else {
+                System.out.println("Survey " + survey.get("id") + " failed - unknown question type.");
+            }
         }
     }
 
@@ -187,15 +189,18 @@ public class Sync {
                 String fs_id = l.get(i).substring(0, l.get(i).indexOf("}") + 1);
                 String title = titles.get(fs_id);
 // Find question
-                stmt = conn.prepareStatement("SELECT id FROM questions WHERE survey_id = ? AND fs_id = ?");
+                stmt = conn.prepareStatement("SELECT id, header FROM questions WHERE survey_id = ? AND fs_id = ?");
                 stmt.setInt(1, survey_id);
                 stmt.setString(2, fs_id);
                 rs = stmt.executeQuery();
                 if (rs.next()) {
 // Question found
                     question_id[i] = rs.getInt("id");
+                    if (!left(title, QUESTION_HEADER_LENGTH).equals(rs.getString("header"))) {
 // TODO Update the question
-                } else {
+
+                    }
+                } else   {
 // Find meta-question
                     stmt = conn.prepareStatement("SELECT id FROM meta_questions WHERE header = ?");
                     stmt.setString(1, left(title, QUESTION_HEADER_LENGTH));
@@ -366,10 +371,10 @@ public class Sync {
         PreparedStatement stmt = conn.prepareStatement("SELECT " +
                         "SECTION.SECTION_ID, " +
         		        "COURSE.COURSE_CODE || TERM.TERM_CODE || SECTION.SECTION_CODE " +
-        	        "FROM SECTION " +
-        		        "LEFT JOIN TERM ON SECTION.TERM_ID = TERM.TERM_ID " +
-        		        "LEFT JOIN SECTION_COURSE ON SECTION.SECTION_ID = SECTION_COURSE.SECTION_ID " +
-        		        "LEFT JOIN COURSE ON SECTION_COURSE.COURSE_ID = COURSE.COURSE_ID " +
+        	        "FROM REGSYSDB.SECTION " +
+        		        "LEFT JOIN REGSYSDB.TERM ON SECTION.TERM_ID = TERM.TERM_ID " +
+        		        "LEFT JOIN REGSYSDB.SECTION_COURSE ON SECTION.SECTION_ID = SECTION_COURSE.SECTION_ID " +
+        		        "LEFT JOIN REGSYSDB.COURSE ON SECTION_COURSE.COURSE_ID = COURSE.COURSE_ID " +
                 "WHERE ? LIKE COURSE.COURSE_CODE || TERM.TERM_CODE || SECTION.SECTION_CODE || '%'");
         stmt.setString(1, code);
         ResultSet rset = stmt.executeQuery();
@@ -454,9 +459,16 @@ public class Sync {
                     case "boolean-choice":
                     case "dropdown-choice":
                     case "text-response":
-                    default:
+                    case "hidden-field":
                         titles.put("{" + question.getString("id") + "}", getQuestionTitle(question));
                         break;
+                    case "datetime":
+                        titles.put("{" + question.getString("id") + "_0}", getQuestionTitle(question));
+                        break;
+                    default:
+                        // Unknown question type
+                        System.out.println("Unknown question type - " + question.getString("idname"));
+                        return null;
                 }
             }
         }
@@ -464,6 +476,17 @@ public class Sync {
     }
     private static String getQuestionTitle(JSONObject question) {
         // It's an assumption that every question has an English title.
-        return Jsoup.parseBodyFragment(question.getJSONObject("title").getString("en")).text();
+        if (question.has("title"))
+            if (question.getJSONObject("title").has("en"))
+                return Jsoup.parseBodyFragment(question.getJSONObject("title").getString("en")).text();
+            else
+                return "~ Missing \"en\" in title";
+        else if (question.has("label"))
+            if (question.getJSONObject("label").has("en"))
+                return Jsoup.parseBodyFragment(question.getJSONObject("label").getString("en")).text();
+            else
+                return "~ Missing \"en\" in label";
+        else
+            return "~ Missing \"title\" and \"label\"";
     }
 }
